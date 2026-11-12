@@ -12,6 +12,7 @@ export default async function LibraryPage() {
     url: `/media/${r.filename}`,
     name: r.original_name,
     size: r.size,
+    mime: r.mime,
     folderId: r.folder_id,
   }));
   return <LibraryClient images={images} folders={await listFolders()} />;

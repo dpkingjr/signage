@@ -14,6 +14,19 @@ export function formatBytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
+const FORMATS: Record<string, string> = {
+  "image/jpeg": "JPEG",
+  "image/png": "PNG",
+  "image/gif": "GIF",
+  "image/webp": "WebP",
+  "image/avif": "AVIF",
+};
+
+/** A short name for an image's file format, e.g. "JPEG". */
+export function formatName(mime: string): string {
+  return FORMATS[mime] ?? (mime.split("/")[1] ?? mime).toUpperCase();
+}
+
 /** A readable label for a video address: its file name, or the host if there isn't one. */
 export function videoLabel(url: string): string {
   try {
