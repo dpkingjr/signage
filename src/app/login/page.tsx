@@ -8,7 +8,7 @@ export default async function LoginPage() {
   if (await getUser()) redirect("/library");
   return (
     <main className="login-wrap">
-      <LoginForm setup={!hasUsers()} />
+      <LoginForm setup={!(await hasUsers())} />
     </main>
   );
 }

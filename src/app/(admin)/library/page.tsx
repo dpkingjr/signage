@@ -1,12 +1,12 @@
 import { requireUser } from "@/lib/auth";
-import { db, listFolders, type ImageRow } from "@/lib/db";
+import { all, listFolders, type ImageRow } from "@/lib/db";
 import LibraryClient from "./LibraryClient";
 
 export const dynamic = "force-dynamic";
 
 export default async function LibraryPage() {
   await requireUser();
-  const rows = db.prepare("SELECT * FROM images ORDER BY id DESC").all() as ImageRow[];
+  const rows = await all<ImageRow>("SELECT * FROM images ORDER BY id DESC");
   const images = rows.map((r) => ({
     id: r.id,
     url: `/media/${r.filename}`,
@@ -14,5 +14,5 @@ export default async function LibraryPage() {
     size: r.size,
     folderId: r.folder_id,
   }));
-  return <LibraryClient images={images} folders={listFolders()} />;
+  return <LibraryClient images={images} folders={await listFolders()} />;
 }

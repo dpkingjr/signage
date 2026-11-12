@@ -5,5 +5,5 @@ export const dynamic = "force-dynamic";
 
 export default async function UsersPage() {
   const me = await requireAdmin();
-  return <UsersClient users={listUsers()} meId={me.id} />;
+  return <UsersClient users={await listUsers()} meId={me.id} />;
 }

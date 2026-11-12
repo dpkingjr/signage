@@ -12,8 +12,8 @@ export async function POST(req: Request) {
   const { profile, error } = readProfile(body);
   const invalid = usernameError(username) ?? passwordError(password) ?? error;
   if (invalid) return NextResponse.json({ error: invalid }, { status: 400 });
-  if (usernameTaken(username)) return NextResponse.json({ error: "That username is already in use." }, { status: 409 });
+  if (await usernameTaken(username)) return NextResponse.json({ error: "That username is already in use." }, { status: 409 });
 
-  const user = createUser(username, password, body?.isAdmin === true, profile);
+  const user = await createUser(username, password, body?.isAdmin === true, profile);
   return NextResponse.json({ user });
 }

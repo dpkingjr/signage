@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getUser } from "@/lib/auth";
-import { db, type PlaylistRow } from "@/lib/db";
+import { get, run, transaction, type PlaylistRow } from "@/lib/db";
 
 type Ctx = { params: Promise<{ id: string }> };
 function isDay(v: unknown): v is string {
@@ -23,7 +23,7 @@ const isSeconds = (v: unknown): v is number => Number.isInteger(v) && (v as numb
 export async function PATCH(req: Request, { params }: Ctx) {
   if (!(await getUser())) return NextResponse.json({ error: "Not signed in." }, { status: 401 });
   const pid = Number((await params).id);
-  const pl = db.prepare("SELECT * FROM playlists WHERE id = ?").get(pid) as PlaylistRow | undefined;
+  const pl = await get<PlaylistRow>("SELECT * FROM playlists WHERE id = ?", [pid]);
   if (!pl) return NextResponse.json({ error: "Playlist not found." }, { status: 404 });
 
   const b = await req.json().catch(() => null);
@@ -44,18 +44,18 @@ export async function PATCH(req: Request, { params }: Ctx) {
   }
 
   try {
-    db.transaction(() => {
-      db.prepare(
-        "UPDATE playlists SET name = ?, default_duration = ?, fit = ?, updated_at = datetime('now') WHERE id = ?"
-      ).run(name, b.defaultDuration, b.fit, pid);
+    await transaction(async (c) => {
+      await run("UPDATE playlists SET name = ?, default_duration = ?, fit = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?", [
+        name,
+        b.defaultDuration,
+        b.fit,
+        pid,
+      ], c);
       if (b.isDefault === true) {
-        db.prepare("UPDATE playlists SET is_default = CASE WHEN id = ? THEN 1 ELSE 0 END").run(pid);
+        await run("UPDATE playlists SET is_default = CASE WHEN id = ? THEN 1 ELSE 0 END", [pid], c);
       }
-      db.prepare("DELETE FROM playlist_items WHERE playlist_id = ?").run(pid);
-      const ins = db.prepare(
-        "INSERT INTO playlist_items (playlist_id, kind, image_id, video_url, position, duration, starts_on, ends_on) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-      );
-      (
+      await run("DELETE FROM playlist_items WHERE playlist_id = ?", [pid], c);
+      const items = (
         b.items as {
           kind?: string;
           imageId: number | null;
@@ -64,13 +64,24 @@ export async function PATCH(req: Request, { params }: Ctx) {
           startsOn?: string | null;
           endsOn?: string | null;
         }[]
-      ).forEach((it, i) => {
-        const s = it.startsOn || null;
-        const e = it.endsOn || null;
-        if (it.kind === "video") ins.run(pid, "video", null, it.videoUrl, i, it.duration, s, e);
-        else ins.run(pid, "image", it.imageId, null, i, it.duration, s, e);
-      });
-    })();
+      ).map((it, i) => [
+        pid,
+        it.kind === "video" ? "video" : "image",
+        it.kind === "video" ? null : it.imageId,
+        it.kind === "video" ? it.videoUrl : null,
+        i,
+        it.duration,
+        it.startsOn || null,
+        it.endsOn || null,
+      ]);
+      if (items.length) {
+        await run(
+          "INSERT INTO playlist_items (playlist_id, kind, image_id, video_url, position, duration, starts_on, ends_on) VALUES ?",
+          [items],
+          c
+        );
+      }
+    });
   } catch {
     return bad("One of the images no longer exists. Reload the page and try again.");
   }
@@ -82,11 +93,12 @@ export async function DELETE(_req: Request, { params }: Ctx) {
   if (!me) return NextResponse.json({ error: "Not signed in." }, { status: 401 });
   if (!me.isAdmin) return NextResponse.json({ error: "Only admins can delete playlists." }, { status: 403 });
   const pid = Number((await params).id);
-  db.transaction(() => {
-    db.prepare("DELETE FROM playlists WHERE id = ?").run(pid);
-    if (!db.prepare("SELECT 1 FROM playlists WHERE is_default = 1").get()) {
-      db.prepare("UPDATE playlists SET is_default = 1 WHERE id = (SELECT MIN(id) FROM playlists)").run();
+  await transaction(async (c) => {
+    await run("DELETE FROM playlists WHERE id = ?", [pid], c);
+    if (!(await get("SELECT 1 FROM playlists WHERE is_default = 1", [], c))) {
+      // MySQL can't use the table being updated in a subquery, so pick the oldest with ORDER BY.
+      await run("UPDATE playlists SET is_default = 1 ORDER BY id LIMIT 1", [], c);
     }
-  })();
+  });
   return NextResponse.json({ ok: true });
 }

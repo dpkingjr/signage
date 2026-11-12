@@ -1,0 +1,39 @@
+name: signage
+
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    env_file: .env
+    # Store and compare timestamps in UTC, matching the app.
+    command: ["--default-time-zone=+00:00"]
+    volumes:
+      - signage-mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    ports:
+      - "${MYSQL_HOST_PORT:-3308}:3306"
+
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      DATA_DIR: /app/data
+    depends_on:
+      mysql:
+        condition: service_healthy
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/.next
+    ports:
+      - "${APP_PORT:-3001}:3000"
+
+volumes:
+  signage-mysql:

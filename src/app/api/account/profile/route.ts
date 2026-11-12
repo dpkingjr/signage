@@ -9,6 +9,6 @@ export async function POST(req: Request) {
   const { profile, error } = readProfile(body);
   if (error) return NextResponse.json({ error }, { status: 400 });
   if (!profile) return NextResponse.json({ error: "Nothing to change." }, { status: 400 });
-  setProfile(me.id, profile);
+  await setProfile(me.id, profile);
   return NextResponse.json({ ok: true });
 }

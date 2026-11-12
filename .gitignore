@@ -2,4 +2,6 @@ node_modules
 .next
 data
 next-env.d.ts
+*.tsbuildinfo
 .env
+.DS_Store

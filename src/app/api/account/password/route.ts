@@ -21,14 +21,14 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => null);
   const current = String(body?.currentPassword ?? "");
   const next = String(body?.newPassword ?? "");
-  if (!verifyLogin(me.username, current)) {
+  if (!(await verifyLogin(me.username, current))) {
     recordFailure(ip);
     return NextResponse.json({ error: "Your current password is wrong." }, { status: 400 });
   }
   const invalid = passwordError(next);
   if (invalid) return NextResponse.json({ error: invalid }, { status: 400 });
 
-  setPassword(me.id, next);
+  await setPassword(me.id, next);
   await startSession(me.id); // setPassword ended every session, including this one.
   return NextResponse.json({ ok: true });
 }

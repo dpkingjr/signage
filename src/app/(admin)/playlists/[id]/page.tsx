@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth";
-import { db, getItems, listFolders, type ImageRow, type PlaylistRow } from "@/lib/db";
+import { all, get, getItems, listFolders, type ImageRow, type PlaylistRow } from "@/lib/db";
 import { videoLabel } from "@/lib/format";
 import PlaylistEditor from "./PlaylistEditor";
 
@@ -9,10 +9,10 @@ export const dynamic = "force-dynamic";
 export default async function PlaylistPage({ params }: { params: Promise<{ id: string }> }) {
   const me = await requireUser();
   const { id } = await params;
-  const pl = db.prepare("SELECT * FROM playlists WHERE id = ?").get(Number(id)) as PlaylistRow | undefined;
+  const pl = await get<PlaylistRow>("SELECT * FROM playlists WHERE id = ?", [Number(id)]);
   if (!pl) notFound();
 
-  const items = getItems(pl.id).map((i) => ({
+  const items = (await getItems(pl.id)).map((i) => ({
     kind: i.kind,
     imageId: i.image_id,
     url: i.kind === "video" ? (i.video_url as string) : `/media/${i.filename}`,
@@ -21,7 +21,7 @@ export default async function PlaylistPage({ params }: { params: Promise<{ id: s
     startsOn: i.starts_on,
     endsOn: i.ends_on,
   }));
-  const library = (db.prepare("SELECT * FROM images ORDER BY id DESC").all() as ImageRow[]).map((r) => ({
+  const library = (await all<ImageRow>("SELECT * FROM images ORDER BY id DESC")).map((r) => ({
     id: r.id,
     url: `/media/${r.filename}`,
     name: r.original_name,
@@ -40,7 +40,7 @@ export default async function PlaylistPage({ params }: { params: Promise<{ id: s
       }}
       initialItems={items}
       library={library}
-      folders={listFolders()}
+      folders={await listFolders()}
       canDelete={me.isAdmin}
     />
   );

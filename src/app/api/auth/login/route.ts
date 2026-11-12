@@ -9,7 +9,7 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => null);
   const username = String(body?.username ?? "").trim();
   const password = String(body?.password ?? "");
-  const user = verifyLogin(username, password);
+  const user = await verifyLogin(username, password);
   if (!user) {
     recordFailure(ip);
     return NextResponse.json({ error: "Wrong username or password." }, { status: 401 });

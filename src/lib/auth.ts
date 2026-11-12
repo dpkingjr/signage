@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
-import { db } from "./db";
+import { all, get, run, transaction, type Queryable } from "./db";
 
 export const SESSION_COOKIE = "signage_session";
 const TTL_SECONDS = 60 * 60 * 24 * 14; // 14 days
@@ -30,8 +30,8 @@ const sha256 = (v: string) => crypto.createHash("sha256").update(v).digest("hex"
 // Used to keep response time similar for unknown usernames.
 const DUMMY_HASH = bcrypt.hashSync("not-a-real-password", 10);
 
-export function hasUsers(): boolean {
-  return (db.prepare("SELECT COUNT(*) AS c FROM users").get() as { c: number }).c > 0;
+export async function hasUsers(): Promise<boolean> {
+  return !!(await get("SELECT 1 FROM users LIMIT 1"));
 }
 
 export function usernameError(username: string): string | null {
@@ -59,23 +59,24 @@ export function readProfile(body: unknown): { profile?: Profile; error?: string 
   return { profile: { firstName, lastName, email } };
 }
 
-export function createUser(username: string, password: string, isAdmin = false, profile?: Profile): User {
+export async function createUser(username: string, password: string, isAdmin = false, profile?: Profile): Promise<User> {
   const hash = bcrypt.hashSync(password, 10);
-  const info = db
-    .prepare("INSERT INTO users (username, password_hash, is_admin, first_name, last_name, email) VALUES (?, ?, ?, ?, ?, ?)")
-    .run(username, hash, isAdmin ? 1 : 0, profile?.firstName ?? "", profile?.lastName ?? "", profile?.email ?? "");
-  return { id: Number(info.lastInsertRowid), username, isAdmin };
+  const info = await run(
+    "INSERT INTO users (username, password_hash, is_admin, first_name, last_name, email) VALUES (?, ?, ?, ?, ?, ?)",
+    [username, hash, isAdmin ? 1 : 0, profile?.firstName ?? "", profile?.lastName ?? "", profile?.email ?? ""]
+  );
+  return { id: info.insertId, username, isAdmin };
 }
 
 /** exceptId lets a user keep their own name, for example when only its capitals change. */
-export function usernameTaken(username: string, exceptId = 0): boolean {
-  return !!db.prepare("SELECT 1 FROM users WHERE username = ? AND id != ?").get(username, exceptId);
+export async function usernameTaken(username: string, exceptId = 0): Promise<boolean> {
+  return !!(await get("SELECT 1 FROM users WHERE username = ? AND id != ?", [username, exceptId]));
 }
 
-export function listUsers(): UserListing[] {
-  const rows = db
-    .prepare("SELECT id, username, is_admin, first_name, last_name, email, created_at FROM users ORDER BY username COLLATE NOCASE")
-    .all() as (UserRow & { first_name: string; last_name: string; email: string; created_at: string })[];
+export async function listUsers(): Promise<UserListing[]> {
+  const rows = await all<UserRow & { first_name: string; last_name: string; email: string; created_at: string }>(
+    "SELECT id, username, is_admin, first_name, last_name, email, created_at FROM users ORDER BY username"
+  );
   return rows.map((r) => ({
     ...toUser(r),
     firstName: r.first_name,
@@ -85,58 +86,55 @@ export function listUsers(): UserListing[] {
   }));
 }
 
-export function getProfile(userId: number): Profile {
-  return db
-    .prepare("SELECT first_name AS firstName, last_name AS lastName, email FROM users WHERE id = ?")
-    .get(userId) as Profile;
+export async function getProfile(userId: number): Promise<Profile> {
+  return (await get<Profile>("SELECT first_name AS firstName, last_name AS lastName, email FROM users WHERE id = ?", [
+    userId,
+  ])) as Profile;
 }
 
-export function setProfile(userId: number, p: Profile) {
-  db.prepare("UPDATE users SET first_name = ?, last_name = ?, email = ? WHERE id = ?").run(
-    p.firstName,
-    p.lastName,
-    p.email,
-    userId
-  );
+export async function setProfile(userId: number, p: Profile, q?: Queryable) {
+  await run("UPDATE users SET first_name = ?, last_name = ?, email = ? WHERE id = ?", [p.firstName, p.lastName, p.email, userId], q);
 }
 
 /** Sets a new password and signs the user out everywhere. Returns false if the user doesn't exist. */
-export function setPassword(userId: number, password: string): boolean {
+export async function setPassword(userId: number, password: string, q?: Queryable): Promise<boolean> {
   const hash = bcrypt.hashSync(password, 10);
-  return db.transaction(() => {
-    const changed = db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(hash, userId).changes > 0;
-    db.prepare("DELETE FROM sessions WHERE user_id = ?").run(userId);
+  const apply = async (c: Queryable) => {
+    const changed = (await run("UPDATE users SET password_hash = ? WHERE id = ?", [hash, userId], c)).affectedRows > 0;
+    await run("DELETE FROM sessions WHERE user_id = ?", [userId], c);
     return changed;
-  })();
+  };
+  return q ? apply(q) : transaction(apply);
 }
 
 /** Applies an admin's edit all at once. Returns false if the user doesn't exist. */
-export function updateUser(
+export async function updateUser(
   userId: number,
   changes: { username?: string | null; password?: string | null; profile?: Profile }
-): boolean {
-  if (!db.prepare("SELECT 1 FROM users WHERE id = ?").get(userId)) return false;
-  db.transaction(() => {
+): Promise<boolean> {
+  if (!(await get("SELECT 1 FROM users WHERE id = ?", [userId]))) return false;
+  await transaction(async (c) => {
     const { username, password, profile } = changes;
-    if (username != null) db.prepare("UPDATE users SET username = ? WHERE id = ?").run(username, userId);
-    if (profile) setProfile(userId, profile);
-    if (password != null) setPassword(userId, password);
-  })();
+    if (username != null) await run("UPDATE users SET username = ? WHERE id = ?", [username, userId], c);
+    if (profile) await setProfile(userId, profile, c);
+    if (password != null) await setPassword(userId, password, c);
+  });
   return true;
 }
 
-export function setAdmin(userId: number, isAdmin: boolean): boolean {
-  return db.prepare("UPDATE users SET is_admin = ? WHERE id = ?").run(isAdmin ? 1 : 0, userId).changes > 0;
+export async function setAdmin(userId: number, isAdmin: boolean): Promise<boolean> {
+  return (await run("UPDATE users SET is_admin = ? WHERE id = ?", [isAdmin ? 1 : 0, userId])).affectedRows > 0;
 }
 
-export function deleteUser(userId: number): boolean {
-  return db.prepare("DELETE FROM users WHERE id = ?").run(userId).changes > 0;
+export async function deleteUser(userId: number): Promise<boolean> {
+  return (await run("DELETE FROM users WHERE id = ?", [userId])).affectedRows > 0;
 }
 
-export function verifyLogin(username: string, password: string): User | null {
-  const row = db.prepare("SELECT id, username, is_admin, password_hash FROM users WHERE username = ?").get(username) as
-    | (UserRow & { password_hash: string })
-    | undefined;
+export async function verifyLogin(username: string, password: string): Promise<User | null> {
+  const row = await get<UserRow & { password_hash: string }>(
+    "SELECT id, username, is_admin, password_hash FROM users WHERE username = ?",
+    [username]
+  );
   if (!row) {
     bcrypt.compareSync(password, DUMMY_HASH);
     return null;
@@ -145,13 +143,13 @@ export function verifyLogin(username: string, password: string): User | null {
 }
 
 export async function startSession(userId: number) {
-  db.prepare("DELETE FROM sessions WHERE expires_at < ?").run(Date.now());
+  await run("DELETE FROM sessions WHERE expires_at < ?", [Date.now()]);
   const token = crypto.randomBytes(32).toString("hex");
-  db.prepare("INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)").run(
+  await run("INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)", [
     sha256(token),
     userId,
-    Date.now() + TTL_SECONDS * 1000
-  );
+    Date.now() + TTL_SECONDS * 1000,
+  ]);
   (await cookies()).set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
@@ -164,19 +162,18 @@ export async function startSession(userId: number) {
 export async function endSession() {
   const jar = await cookies();
   const token = jar.get(SESSION_COOKIE)?.value;
-  if (token) db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(sha256(token));
+  if (token) await run("DELETE FROM sessions WHERE token_hash = ?", [sha256(token)]);
   jar.delete(SESSION_COOKIE);
 }
 
 export async function getUser(): Promise<User | null> {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
   if (!token) return null;
-  const row = db
-    .prepare(
-      `SELECT u.id, u.username, u.is_admin FROM sessions s JOIN users u ON u.id = s.user_id
-       WHERE s.token_hash = ? AND s.expires_at > ?`
-    )
-    .get(sha256(token), Date.now()) as UserRow | undefined;
+  const row = await get<UserRow>(
+    `SELECT u.id, u.username, u.is_admin FROM sessions s JOIN users u ON u.id = s.user_id
+     WHERE s.token_hash = ? AND s.expires_at > ?`,
+    [sha256(token), Date.now()]
+  );
   return row ? toUser(row) : null;
 }
 
